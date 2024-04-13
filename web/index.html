@@ -3,8 +3,6 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" href="https://pyscript.net/releases/2024.1.1/core.css" />
-        <script type="module" src="https://pyscript.net/releases/2024.1.1/core.js"></script>
         <title>Brachio Tools</title>
         <style>
             * {
@@ -21,19 +19,108 @@
                 background-color: lightgray;
                 text-align: center;
             }
+            .needspace {
+                margin-top: 10px;
+            }
             .slightlytorightandbottom {
                 margin-left: 20px;
                 padding-top: 20px;
-                display: grid;
-                gap: 1em;
+            }
+            .hide {
+                display: none;
             }
         </style>
     </head>
     <body>
-        <h1 class="">SVG ➡️ Brachio JSON file</h1>
+        <h1>SVG ➡️ Brachio JSON file</h1>
         <div class="slightlytorightandbottom">
-            <input type="file" id="myFile" name="Input SVG">
-            <div class="" id="dropsite">Or drop here...</div>
+            
+            <div id="dropsite"><input type="file" id="uploadfile" name="Input SVG" accept=".svg" class="needspace"><br><span class="needspace">Or drop here</span></div>
+            <input type="checkbox" class="needspace" name="join lines" id="joinlines">
+            <label for="joinlines" >Should join lines.</label><br>
+            <input type="checkbox" class="needspace" name="round values" id="roundvalues">
+            <label for="roundvalues">Should round values.</label><br>
         </div>
+        <div class="slightlytorightandbottom hide" id="loading">
+            <span>Converting</span>
+        </div>
+        <div class="slightlytorightandbottom hide" id="finish">
+            <input type="button" value="Download" id="download">
+        </div>
+        <script>
+            const dropsite = document.getElementById("dropsite");
+            const fileupload = document.getElementById("uploadfile");
+            const loading = document.getElementById("loading");
+            const finish = document.getElementById("finish");
+            const download = document.getElementById("download");
+            const joinlines = document.getElementById("joinlines");
+            const roundvalues = document.getElementById("roundvalues");
+
+            const converterUrl = window.location.origin+"/convert";
+
+            let downloadData = null;
+
+            dropsite.addEventListener("drop", (ev)=>{
+                loading.classList.remove("hide");
+                
+                let reader = new FileReader();
+                reader.readAsText(ev.dataTransfer.files[0], "UTF-8");
+                reader.onload = (evt) => {
+                    convert(evt.target.result);
+                }
+                reader.onerror = (evt) => {
+                    console.error("Error reading file")
+                }
+            });
+            fileupload.addEventListener("change", (ev)=>{
+                loading.classList.remove("hide");
+                let reader = new FileReader();
+                reader.readAsText(fileupload.files[0], "UTF-8");
+                reader.onload = (evt) => {
+                    convert(evt.target.result);
+                }
+                reader.onerror = (evt) => {
+                    console.error("Error reading file")
+                }
+            });
+            download.addEventListener("click", ()=>{
+                if (downloadData == null||downloadData == undefined) {
+                    return;
+                }
+                let file = new Blob([downloadData], { type: "application/json" });
+                if (window.navigator.msSaveOrOpenBlob)
+                    window.navigator.msSaveOrOpenBlob(file, "converted.json");
+                else {
+                    let a = document.createElement("a"),
+                        url = URL.createObjectURL(file);
+                    a.href = url;
+                    a.download = "converted.json";
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                }
+                downloadData = null;
+                setTimeout(()=>{
+                    finish.classList.add("hide");
+                }, 1000);
+            });
+            function convert(data) {
+                fetch(converterUrl, {
+                    method: "POST",
+                    mode: "same-origin",
+                    cache: "no-cache",
+                    headers: {
+                        "Content-Type": "image/svg+xml",
+                        "joinLines": joinlines.checked ? "true" : "false",
+                        "roundValues": roundvalues.checked ? "true" : "false"
+                    },
+                    body: data
+                }).then(async (res) => {
+                    loading.classList.add("hide");
+                    downloadData = await res.text();
+                    finish.classList.remove("hide");
+                });
+                
+            }
+        </script>
     </body>
 </html>
