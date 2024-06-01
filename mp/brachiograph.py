@@ -3,9 +3,9 @@
 # From BrachioGraph
 
 from time import sleep
-import readchar
+# import readchar
 import math
-import numpy
+import servo
 from plotter import Plotter
 
 
@@ -16,6 +16,7 @@ class BrachioGraph(Plotter):
         self,
         servo_1: servo.Servo,
         servo_2: servo.Servo,
+        servo_3: servo.Servo,
         virtual: bool = False,  # a virtual plotter runs in software only
         turtle: bool = False,  # create a turtle graphics plotter
         turtle_coarseness=None,  # a factor in degrees representing servo resolution
@@ -34,11 +35,11 @@ class BrachioGraph(Plotter):
         hysteresis_correction_1: int = 0,  # hardware error compensation
         hysteresis_correction_2: int = 0,
         #  ----------------- servo angles and pulse-widths in lists -----------------
-        servo_1_angle_pws: tuple = (),  # pulse-widths for various angles
-        servo_2_angle_pws: tuple = (),
+        servo_1_angle_pws: list = [],  # pulse-widths for various angles
+        servo_2_angle_pws: list = [],
         #  ----------------- servo angles and pulse-widths in lists (bi-directional) ------
-        servo_1_angle_pws_bidi: tuple = (),  # bi-directional pulse-widths for various angles
-        servo_2_angle_pws_bidi: tuple = (),
+        servo_1_angle_pws_bidi: dict = {},  # bi-directional pulse-widths for various angles
+        servo_2_angle_pws_bidi: dict = {},
         #  ----------------- the pen -----------------
         pw_up: int = 1500,  # pulse-widths for pen up/down
         pw_down: int = 1100,
@@ -59,6 +60,7 @@ class BrachioGraph(Plotter):
         super().__init__(
             servo_1,
             servo_2,
+            servo_3,
             bounds=bounds,
             servo_1_parked_pw=servo_1_parked_pw,
             servo_2_parked_pw=servo_2_parked_pw,
@@ -82,26 +84,6 @@ class BrachioGraph(Plotter):
             turtle_coarseness=turtle_coarseness,
         )
 
-    def setup_turtle(self, coarseness):
-        
-        from turtle_plotter import BrachioGraphTurtle
-
-        self.turtle = BrachioGraphTurtle(
-            inner_arm=self.inner_arm,  # the length of the inner arm (blue)
-            outer_arm=self.outer_arm,  # the length of the outer arm (red)
-            shoulder_centre_angle=-90,  # the starting angle of the inner arm, relative to straight ahead
-            shoulder_sweep=180,  # the arc covered by the shoulder motor
-            elbow_centre_angle=90,  # the centre of the outer arm relative to the inner arm
-            elbow_sweep=180,  # the arc covered by the elbow motor
-            window_size=850,  # width and height of the turtle canvas
-            speed=10,  # how fast to draw
-            machine=self,
-            coarseness=coarseness,
-        )
-
-        self.turtle.draw_grid()
-        self.t = self.turtle
-
     def test_arcs(self):
         self.park()
         elbow_angle = 120
@@ -119,7 +101,7 @@ class BrachioGraph(Plotter):
 
     # ----------------- trigonometric methods -----------------
 
-    def xy_to_angles(self, x=0, y=0):
+    def xy_to_angles(self, x:float=0, y:float=0):
         """Return the servo angles required to reach any x/y position."""
 
         hypotenuse = math.sqrt(x**2 + y**2)

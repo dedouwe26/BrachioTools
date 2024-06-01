@@ -25,7 +25,7 @@ class PicoServo(Servo):
         self.pwm.freq(50)
         machine.time_pulse_us(port, 0)
     def get(self) -> int:
-        return 0 # FIXME: fixed value.
+        return self.pwm.duty_u16()
     def goto(self, pos: int):
         self.pwm.duty_u16(pos)
 

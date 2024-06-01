@@ -2,21 +2,20 @@
 
 # From BrachioGraph
 
-from time import sleep, monotonic
+from time import sleep, ticks_ms
 import json
-import pprint
 import math
-import readchar
-import tqdm
-import pigpio
 import numpy
 import servo
 
-
+def monotonic():
+    return ticks_ms() / 1000
 
 
 class Plotter:
     has_turtle: bool
+    angle_2: float | None
+    angle_1: float | None
     def __init__(
         self,
         servo_1: servo.Servo,
@@ -38,21 +37,22 @@ class Plotter:
         hysteresis_correction_1: float = 0,  # hardware error compensation
         hysteresis_correction_2: float = 0,
         #  ----------------- servo angles and pulse-widths in lists -----------------
-        servo_1_angle_pws: tuple = (),  # pulse-widths for various angles
-        servo_2_angle_pws: tuple = (),
+        servo_1_angle_pws: list = [],  # pulse-widths for various angles
+        servo_2_angle_pws: list = [],
         #  ----------------- servo angles and pulse-widths in lists (bi-directional) ------
-        servo_1_angle_pws_bidi: tuple = (),  # bi-directional pulse-widths for various angles
-        servo_2_angle_pws_bidi: tuple = (),
+        servo_1_angle_pws_bidi: dict = {},  # bi-directional pulse-widths for various angles
+        servo_2_angle_pws_bidi: dict = {},
         #  ----------------- the pen -----------------
-        pw_up: int = None,  # pulse-widths for pen up/down
-        pw_down: int = None,
+        pw_up: int | None = None,  # pulse-widths for pen up/down
+        pw_down: int | None = None,
         #  ----------------- physical control -----------------
-        angular_step: float = None,  # default step of the servos in degrees
-        wait: float = None,  # default wait time between operations
-        resolution: float = None,  # default resolution of the plotter in cm
+        angular_step: float | None = None,  # default step of the servos in degrees
+        wait: float | None = None,  # default wait time between operations
+        resolution: float | None = None,  # default resolution of the plotter in cm
     ):
         self.servo_1 = servo_1
         self.servo_2 = servo_2
+        self.servo_3 = servo_3
         self.last_moved = monotonic()
         self.virtual = virtual
         self.angle_1 = servo_1_parked_angle
@@ -136,14 +136,6 @@ class Plotter:
 
         else:
             try:
-                pigpio.exceptions = False
-                # instantiate this Raspberry Pi as a pigpio.pi() instance
-                self.rpi = pigpio.pi()
-                # the pulse frequency should be no higher than 100Hz - higher values could
-                # (supposedly) # damage the servos
-                self.rpi.set_PWM_frequency(14, 50)
-                self.rpi.set_PWM_frequency(15, 50)
-                pigpio.exceptions = True
                 self.virtual = False
                 # by default we use a wait factor of 0.01 seconds for better control
                 self.wait = wait if wait is not None else 0.01
@@ -222,7 +214,7 @@ class Plotter:
 
         lines = self.rotate_and_scale_lines(lines=lines, bounds=bounds, flip=True)
 
-        for line in tqdm.tqdm(lines, desc="Lines", leave=False):
+        for line in lines:
             x, y = line[0]
 
             # only if we are not within 1mm of the start of the line, lift pen and go there
@@ -249,7 +241,7 @@ class Plotter:
 
         self.xy(bounds[0], bounds[1], angular_step, wait, resolution)
 
-        for r in tqdm.tqdm(tqdm.trange(repeat), desc="Iteration", leave=False):
+        for r in range(repeat):
 
             if not reverse:
 
@@ -365,7 +357,7 @@ class Plotter:
         if both:
             self.xy(start_x, start_y, angular_step, wait, resolution, draw=True)
 
-    def xy(self, x=None, y=None, angular_step=None, wait=None, resolution=None, draw=False):
+    def xy(self, x:None|float=None, y:None|float=None, angular_step=None, wait=None, resolution=None, draw=False):
         """Moves the pen to the xy position; optionally draws while doing it. ``None`` for x or y
         means that the pen will not be moved in that dimension.
         """
@@ -380,7 +372,8 @@ class Plotter:
         if draw:
 
             # calculate how many steps we need for this move, and the x/y length of each
-            (x_length, y_length) = (x - self.x, y - self.y)
+            if x!=None:
+                (x_length, y_length) = (x - self.x, y - self.y)
 
             length = math.sqrt(x_length**2 + y_length**2)
 
@@ -435,12 +428,10 @@ class Plotter:
 
         (length_of_step_1, length_of_step_2) = (diff_1 / no_of_steps, diff_2 / no_of_steps)
 
-        for step in tqdm.tqdm(
-            range(no_of_steps), desc="Progress", leave=False, disable=disable_tqdm
-        ):
-
-            self.angle_1 = self.angle_1 + length_of_step_1
-            self.angle_2 = self.angle_2 + length_of_step_2
+        for step in range(no_of_steps):
+            if (self.angle_1 != None) and (self.angle_2 != None):
+                self.angle_1 = self.angle_1 + length_of_step_1
+                self.angle_2 = self.angle_2 + length_of_step_2
 
             time_since_last_moved = monotonic() - self.last_moved
             if time_since_last_moved < wait:
@@ -687,12 +678,12 @@ class Plotter:
 
         else:
 
-            actual_pulse_width_1 = self.rpi.get_servo_pulsewidth(14)
-            actual_pulse_width_2 = self.rpi.get_servo_pulsewidth(15)
+            actual_pulse_width_1 = self.servo_1.get()
+            actual_pulse_width_2 = self.servo_2.get()
 
         return (actual_pulse_width_1, actual_pulse_width_2)
 
-    def quiet(self, servos=[14, 15, 18]):
+    def quiet(self):
         """Stop sending pulses to the servos, so that they are no longer energised (and so that they
         stop buzzing).
         """
@@ -701,136 +692,136 @@ class Plotter:
             print("Going quiet")
 
         else:
-            for servo in servos:
-                self.rpi.set_servo_pulsewidth(servo, 0)
+            for servo in [self.servo_1, self.servo_2, self.servo_3]:
+                servo.goto(0)
 
     # ----------------- manual driving methods -----------------
 
-    def capture_pws(self):
-        """
-        Helps capture angle/pulse-width data for the servos, as a dictionary to be used
-        in a Plotter definition.
-        """
+#     def capture_pws(self):
+#         """
+#         Helps capture angle/pulse-width data for the servos, as a dictionary to be used
+#         in a Plotter definition.
+#         """
 
-        print(
-            """
-Drive each servo over a wide range of movement (do not exceed a pulse-width
-range ~600 to ~2400). To capture the pulse-width value for a particular angle,
-press "c", then enter the angle. For each angle, do this in both directions,
-clockwise and anti-clockwise. Press "0" to exit.
-        """
-        )
+#         print(
+#             """
+# Drive each servo over a wide range of movement (do not exceed a pulse-width
+# range ~600 to ~2400). To capture the pulse-width value for a particular angle,
+# press "c", then enter the angle. For each angle, do this in both directions,
+# clockwise and anti-clockwise. Press "0" to exit.
+#         """
+#         )
 
-        pw_1, pw_2 = self.get_pulse_widths()
-        pen_pw = self.pen.get_pw()
+#         pw_1, pw_2 = self.get_pulse_widths()
+#         pen_pw = self.pen.get_pw()
 
-        last_action = values = None
-        pws1_dict = {}
-        pws2_dict = {}
-        pen_pw_dict = {}
+#         last_action = values = None
+#         pws1_dict = {}
+#         pws2_dict = {}
+#         pen_pw_dict = {}
 
-        print("0 to exit, c to capture a value, v to show captured values")
-        print("Shoulder a: -10  A: -1   s: +10  S: +1")
-        print("Elbow    k: -10  K: -1   l: +10  L: +1")
-        print("Pen      z: -10          x: +10")
+#         print("0 to exit, c to capture a value, v to show captured values")
+#         print("Shoulder a: -10  A: -1   s: +10  S: +1")
+#         print("Elbow    k: -10  K: -1   l: +10  L: +1")
+#         print("Pen      z: -10          x: +10")
 
-        controls = {
-            "a": [-10, 0, 0, "acw"],
-            "A": [-1, 0, 0, "acw"],
-            "s": [+10, 0, 0, "cw"],
-            "S": [+1, 0, 0, "cw"],
-            "k": [0, -10, 0, "acw"],
-            "K": [0, -1, 0, "acw"],
-            "l": [0, +10, 0, "cw"],
-            "L": [0, +1, 0, "cw"],
-            "z": [0, 0, -10],
-            "x": [0, 0, +10],
-        }
+#         controls = {
+#             "a": [-10, 0, 0, "acw"],
+#             "A": [-1, 0, 0, "acw"],
+#             "s": [+10, 0, 0, "cw"],
+#             "S": [+1, 0, 0, "cw"],
+#             "k": [0, -10, 0, "acw"],
+#             "K": [0, -1, 0, "acw"],
+#             "l": [0, +10, 0, "cw"],
+#             "L": [0, +1, 0, "cw"],
+#             "z": [0, 0, -10],
+#             "x": [0, 0, +10],
+#         }
 
-        while True:
-            # move the arms if commanded
-            key = readchar.readchar()
-            values = controls.get(key)
+#         while True:
+#             # move the arms if commanded
+#             key = readchar.readchar()
+#             values = controls.get(key)
 
-            if values:
+#             if values:
 
-                if values[0] or values[1] or values[2]:
-                    previous_pw_1, previous_pw_2, previous_pen_pw = pw_1, pw_2, pen_pw
-                    pw_1 += values[0]
-                    pw_2 += values[1]
-                    pen_pw += values[2]
+#                 if values[0] or values[1] or values[2]:
+#                     previous_pw_1, previous_pw_2, previous_pen_pw = pw_1, pw_2, pen_pw
+#                     pw_1 += values[0]
+#                     pw_2 += values[1]
+#                     pen_pw += values[2]
 
-                    print(f"shoulder: {pw_1}, elbow: {pw_2}, pen: {pen_pw}")
+#                     print(f"shoulder: {pw_1}, elbow: {pw_2}, pen: {pen_pw}")
 
-                    self.set_pulse_widths(pw_1, pw_2)
-                    self.pen.pw(pen_pw)
+#                     self.set_pulse_widths(pw_1, pw_2)
+#                     self.pen.pw(pen_pw)
 
-                    last_action = values
+#                     last_action = values
 
-            elif key == "0" or key == "v":
-                # exit and print results
-                print("servo_1_angle_pws_bidi =")
-                pprint.pp(pws1_dict, sort_dicts=True, indent=4)
-                print("servo_2_angle_pws_bidi =")
-                pprint.pp(pws2_dict, sort_dicts=True, indent=4)
-                print("Pen pulse-widths =")
-                pprint.pp(pen_pw_dict)
+#             elif key == "0" or key == "v":
+#                 # exit and print results
+#                 print("servo_1_angle_pws_bidi =")
+#                 pprint.pp(pws1_dict, sort_dicts=True, indent=4)
+#                 print("servo_2_angle_pws_bidi =")
+#                 pprint.pp(pws2_dict, sort_dicts=True, indent=4)
+#                 print("Pen pulse-widths =")
+#                 pprint.pp(pen_pw_dict)
 
-                if key == "0":
-                    return
+#                 if key == "0":
+#                     return
 
-            elif key == "c":
-                # capture a value
-                if not last_action:
-                    print("Drive the servos to a new position first")
+#             elif key == "c":
+#                 # capture a value
+#                 if not last_action:
+#                     print("Drive the servos to a new position first")
 
-                # add the values - if any - to the dictionaries
-                elif last_action[0]:
-                    angle = int(input("Enter the angle of the inner arm: "))
-                    pws1_dict.setdefault(angle, {})[last_action[3]] = pw_1
+#                 # add the values - if any - to the dictionaries
+#                 elif last_action[0]:
+#                     angle = int(input("Enter the angle of the inner arm: "))
+#                     pws1_dict.setdefault(angle, {})[last_action[3]] = pw_1
 
-                    print(pws1_dict)
+#                     print(pws1_dict)
 
-                elif last_action[1]:
-                    angle = int(input("Enter the angle of the outer arm: "))
-                    pws2_dict.setdefault(angle, {})[last_action[3]] = pw_2
+#                 elif last_action[1]:
+#                     angle = int(input("Enter the angle of the outer arm: "))
+#                     pws2_dict.setdefault(angle, {})[last_action[3]] = pw_2
 
-                    print(pws2_dict)
+#                     print(pws2_dict)
 
-                elif last_action[2]:
-                    state = input("Enter the state of the pen ([u]p, [d]own):")
-                    pen_pw_dict[state] = pen_pw
+#                 elif last_action[2]:
+#                     state = input("Enter the state of the pen ([u]p, [d]own):")
+#                     pen_pw_dict[state] = pen_pw
 
-                    print(pen_pw)
+#                     print(pen_pw)
 
-    def drive_xy(self):
-        """Control the x/y position using the keyboard."""
+    # def drive_xy(self):
+    #     """Control the x/y position using the keyboard."""
 
-        while True:
-            key = readchar.readchar()
+    #     while True:
+    #         key = readchar.readchar()
 
-            if key == "0":
-                return
-            elif key == "a":
-                self.x = self.x - 1
-            elif key == "s":
-                self.x = self.x + 1
-            elif key == "A":
-                self.x = self.x - 0.1
-            elif key == "S":
-                self.x = self.x + 0.1
-            elif key == "k":
-                self.y = self.y - 1
-            elif key == "l":
-                self.y = self.y + 1
-            elif key == "K":
-                self.y = self.y - 0.1
-            elif key == "L":
-                self.y = self.y + 0.1
+    #         if key == "0":
+    #             return
+    #         elif key == "a":
+    #             self.x = self.x - 1
+    #         elif key == "s":
+    #             self.x = self.x + 1
+    #         elif key == "A":
+    #             self.x = self.x - 0.1
+    #         elif key == "S":
+    #             self.x = self.x + 0.1
+    #         elif key == "k":
+    #             self.y = self.y - 1
+    #         elif key == "l":
+    #             self.y = self.y + 1
+    #         elif key == "K":
+    #             self.y = self.y - 0.1
+    #         elif key == "L":
+    #             self.y = self.y + 0.1
 
-            print(self.x, self.y)
+    #         print(self.x, self.y)
 
-            self.xy(self.x, self.y)
+    #         self.xy(self.x, self.y)
 
     # ----------------- reporting methods -----------------
 
@@ -894,7 +885,7 @@ clockwise and anti-clockwise. Press "0" to exit.
 
     # ----------------- trigonometric methods -----------------
 
-    def xy_to_angles(self, x=0, y=0):
+    def xy_to_angles(self, x:None|float=0, y:None|float=0):
         """Return the servo angles required to reach any x/y position. This is a dummy method in
         the base class; it needs to be overridden in a sub-class implementation."""
         return (0, 0)
