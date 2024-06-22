@@ -13,7 +13,7 @@ class Servo:
         diff = end - start
         angle = start
         length_of_step = diff / abs(diff)
-        for i in range(abs(diff)):
+        for _ in range(abs(diff)):
             angle += length_of_step
             self.goto_float(angle)
             time.sleep(0.001)

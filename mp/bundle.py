@@ -1,19 +1,76 @@
-"""Contains a base class for a drawing robot."""
+# BrachioGraph bundle for MicroPython
 
-# From BrachioGraph
+### CONFIG ###
+
+# The path to the file on the MicroPython device.
+FILENAME = "drawing.json"
+
+# Servo ports
+SERVO1 = 28 # The servo that sits on the ground.
+SERVO2 = 27 # The servo in the center.
+SERVO3 = 26 # The servo used to push up and down the pen.
+
+### END CONFIG ###
+
+### SERVO ABSTRACTIONS
 
 from time import sleep, ticks_ms
+
+try:
+    import machine
+except ImportError:
+    print("ERROR: This device does not have MicroPython.")
+    exit(1)
+
+class Servo:
+    def __init__(self):
+        pass
+    def get(self) -> int:
+        raise NotImplementedError()
+    def goto(self, pos: int):
+        raise NotImplementedError()
+    def goto_float(self, pos: float):
+        self.goto(round(pos))
+    def move(self, start: int, end: int):
+        diff = end - start
+        angle = start
+        length_of_step = diff / abs(diff)
+        for _ in range(abs(diff)):
+            angle += length_of_step
+            self.goto_float(angle)
+            sleep(0.001)
+
+class PicoServo(Servo):
+    def __init__(self, port: int):
+        self.pwm = machine.PWM(machine.Pin(port))
+        self.pwm.freq(50)
+        machine.time_pulse_us(port, 0)
+    def get(self) -> int:
+        return self.pwm.duty_u16()
+    def goto(self, pos: int):
+        self.pwm.duty_u16(pos)
+
+### END SERVO ABSTRACTIONS
+
+### PLOTTER
+
+# necessary imports for the plotter class
 import json
 import math
+
+# Try to import numpy from ulab.
 try:
     from ulab import numpy
 except ImportError:
-    import numpy
-import servo
+    try:
+        import numpy
+    except ImportError:
+        print("ERROR: ulab micropython is not installed.")
+        exit(1)
 
+# replacing function
 def monotonic():
     return ticks_ms() / 1000
-
 
 class Plotter:
     has_turtle: bool
@@ -21,9 +78,9 @@ class Plotter:
     angle_1: float | None
     def __init__(
         self,
-        servo_1: servo.Servo,
-        servo_2: servo.Servo,
-        servo_3: servo.Servo,
+        servo_1: Servo,
+        servo_2: Servo,
+        servo_3: Servo,
         virtual: bool = False,  # a virtual plotter runs in software only
         turtle: bool = False,  # create a turtle graphics plotter
         turtle_coarseness=None,  # a factor in degrees representing servo resolution
@@ -890,7 +947,7 @@ class Plotter:
 
 
 class Pen:
-    def __init__(self, servo: servo.Servo, bg: Plotter, pw_up=1700, pw_down=1300, transition_time=0.25, virtual=False):
+    def __init__(self, servo: Servo, bg: Plotter, pw_up=1700, pw_down=1300, transition_time=0.25, virtual=False):
         self.servo = servo
         self.bg = bg
         self.pw_up = pw_up
@@ -943,6 +1000,7 @@ class Pen:
         Moves the pen gently instead of all at once. Slower but reduces marking on the paper.
         """
         self.servo.move(start, end)
+        
 
     # for convenience, a quick way to set pen motor pulse-widths
     def pw(self, pulse_width):
@@ -961,3 +1019,229 @@ class Pen:
 
         else:
             return self.servo.get()
+
+### END PLOTTER
+
+### BRACHIOGRAPH
+
+import math
+
+class BrachioGraph(Plotter):
+    """A shoulder-and-elbow drawing robot class."""
+
+    def __init__(
+        self,
+        servo_1: Servo,
+        servo_2: Servo,
+        servo_3: Servo,
+        virtual: bool = False,  # a virtual plotter runs in software only
+        turtle: bool = False,  # create a turtle graphics plotter
+        turtle_coarseness=None,  # a factor in degrees representing servo resolution
+        #  ----------------- geometry of the plotter -----------------
+        bounds: tuple[int, int, int, int] = (-8, 4, 6, 13),  # the maximum rectangular drawing area
+        inner_arm: float = 8,  # the lengths of the arms
+        outer_arm: float = 8,
+        #  ----------------- naive calculation values -----------------
+        servo_1_parked_pw: int = 1500,  # pulse-widths when parked
+        servo_2_parked_pw: int = 1500,
+        servo_1_degree_ms: int = -10,  # milliseconds pulse-width per degree
+        servo_2_degree_ms: int = 10,  # reversed for the mounting of the shoulder servo
+        servo_1_parked_angle: int = -90,  # the arm angle in the parked position
+        servo_2_parked_angle: int = 90,
+        #  ----------------- hysteresis -----------------
+        hysteresis_correction_1: int = 0,  # hardware error compensation
+        hysteresis_correction_2: int = 0,
+        #  ----------------- servo angles and pulse-widths in lists -----------------
+        servo_1_angle_pws: list = [],  # pulse-widths for various angles
+        servo_2_angle_pws: list = [],
+        #  ----------------- servo angles and pulse-widths in lists (bi-directional) ------
+        servo_1_angle_pws_bidi: dict = {},  # bi-directional pulse-widths for various angles
+        servo_2_angle_pws_bidi: dict = {},
+        #  ----------------- the pen -----------------
+        pw_up: int = 1500,  # pulse-widths for pen up/down
+        pw_down: int = 1100,
+        #  ----------------- physical control -----------------
+        wait: float | None = None,  # default wait time between operations
+        angular_step: float | None = None,  # default step of the servos in degrees
+        resolution: float | None = None,  # default resolution of the plotter in cm
+    ):
+
+        # set the geometry
+        self.inner_arm = inner_arm
+        self.outer_arm = outer_arm
+
+        # Set the x and y position state, so it knows its current x/y position.
+        self.x = -self.inner_arm
+        self.y = self.outer_arm
+
+        super().__init__(
+            servo_1,
+            servo_2,
+            servo_3,
+            bounds=bounds,
+            servo_1_parked_pw=servo_1_parked_pw,
+            servo_2_parked_pw=servo_2_parked_pw,
+            servo_1_degree_ms=servo_1_degree_ms,
+            servo_2_degree_ms=servo_2_degree_ms,
+            servo_1_parked_angle=servo_1_parked_angle,
+            servo_2_parked_angle=servo_2_parked_angle,
+            hysteresis_correction_1=hysteresis_correction_1,
+            hysteresis_correction_2=hysteresis_correction_2,
+            servo_1_angle_pws=servo_1_angle_pws,
+            servo_2_angle_pws=servo_2_angle_pws,
+            servo_1_angle_pws_bidi=servo_1_angle_pws_bidi,
+            servo_2_angle_pws_bidi=servo_2_angle_pws_bidi,
+            pw_up=pw_up,
+            pw_down=pw_down,
+            wait=wait,
+            angular_step=angular_step,
+            resolution=resolution,
+            virtual=virtual,
+            turtle=turtle,
+            turtle_coarseness=turtle_coarseness,
+        )
+
+    def test_arcs(self):
+        self.park()
+        elbow_angle = 120
+        self.move_angles(angle_2=elbow_angle)
+
+        for angle_1 in range(-135, 15, 15):
+            self.move_angles(angle_1=angle_1, draw=True)
+
+            for angle_2 in range(elbow_angle, elbow_angle + 16):
+                self.move_angles(angle_2=angle_2, draw=True)
+            for angle_2 in range(elbow_angle + 16, elbow_angle - 16, -1):
+                self.move_angles(angle_2=angle_2, draw=True)
+            for angle_2 in range(elbow_angle - 16, elbow_angle + 1):
+                self.move_angles(angle_2=angle_2, draw=True)
+
+    # ----------------- trigonometric methods -----------------
+
+    def xy_to_angles(self, x:float=0, y:float=0):
+        """Return the servo angles required to reach any x/y position."""
+
+        hypotenuse = math.sqrt(x**2 + y**2)
+
+        if hypotenuse > self.inner_arm + self.outer_arm:
+            raise Exception(
+                f"Cannot reach {hypotenuse}; total arm length is {self.inner_arm + self.outer_arm}"
+            )
+
+        hypotenuse_angle = math.asin(x / hypotenuse)
+
+        inner_angle = math.acos(
+            (hypotenuse**2 + self.inner_arm**2 - self.outer_arm**2)
+            / (2 * hypotenuse * self.inner_arm)
+        )
+        outer_angle = math.acos(
+            (self.inner_arm**2 + self.outer_arm**2 - hypotenuse**2)
+            / (2 * self.inner_arm * self.outer_arm)
+        )
+
+        shoulder_motor_angle = hypotenuse_angle - inner_angle
+        elbow_motor_angle = math.pi - outer_angle
+
+        return (math.degrees(shoulder_motor_angle), math.degrees(elbow_motor_angle))
+
+    def angles_to_xy(self, shoulder_motor_angle, elbow_motor_angle):
+        """Return the x/y co-ordinates represented by a pair of servo angles."""
+
+        elbow_motor_angle = math.radians(elbow_motor_angle)
+        shoulder_motor_angle = math.radians(shoulder_motor_angle)
+
+        hypotenuse = math.sqrt(
+            (
+                self.inner_arm**2
+                + self.outer_arm**2
+                - 2
+                * self.inner_arm
+                * self.outer_arm
+                * math.cos(math.pi - elbow_motor_angle)
+            )
+        )
+        base_angle = math.acos(
+            (hypotenuse**2 + self.inner_arm**2 - self.outer_arm**2)
+            / (2 * hypotenuse * self.inner_arm)
+        )
+        inner_angle = base_angle + shoulder_motor_angle
+
+        x = math.sin(inner_angle) * hypotenuse
+        y = math.cos(inner_angle) * hypotenuse
+
+        return (x, y)
+
+    # ----------------- reporting methods -----------------
+
+    def report(self):
+
+        print(f"               -----------------|-----------------")
+        print(f"               Servo 1          |  Servo 2        ")
+        print(f"               -----------------|-----------------")
+
+        h1, h2 = self.hysteresis_correction_1, self.hysteresis_correction_2
+        print(f"hysteresis                 {h1:>2.1f}  |              {h2:>2.1f}")
+
+        pw_1, pw_2 = self.get_pulse_widths()
+        print(f"pulse-width               {pw_1:<4.0f}  |             {pw_2:<4.0f}")
+
+        angle_1, angle_2 = self.angle_1, self.angle_2
+
+        if angle_1 and angle_2:
+
+            print(
+                f"      angle               {angle_1:>4.0f}  |             {angle_2:>4.0f}"
+            )
+
+        print(f"               -----------------|-----------------")
+        print(f"               min   max   mid  |  min   max   mid")
+        print(f"               -----------------|-----------------")
+
+        if (
+            self.angles_used_1
+            and self.angles_used_2
+            and self.pulse_widths_used_1
+            and self.pulse_widths_used_2
+        ):
+
+            min1 = min(self.pulse_widths_used_1)
+            max1 = max(self.pulse_widths_used_1)
+            mid1 = (min1 + max1) / 2
+            min2 = min(self.pulse_widths_used_2)
+            max2 = max(self.pulse_widths_used_2)
+            mid2 = (min2 + max2) / 2
+
+            print(
+                f"pulse-widths  {min1:>4.0f}  {max1:>4.0f}  {mid1:>4.0f}  | {min2:>4.0f}  {max2:>4.0f}  {mid2:>4.0f}"
+            )
+
+            min1 = min(self.angles_used_1)
+            max1 = max(self.angles_used_1)
+            mid1 = (min1 + max1) / 2
+            min2 = min(self.angles_used_2)
+            max2 = max(self.angles_used_2)
+            mid2 = (min2 + max2) / 2
+
+            print(
+                f"      angles  {min1:>4.0f}  {max1:>4.0f}  {mid1:>4.0f}  | {min2:>4.0f}  {max2:>4.0f}  {mid2:>4.0f}"
+            )
+
+        else:
+
+            print(
+                "No data recorded yet. Try calling the BrachioGraph.box() method first."
+            )
+
+# END BRACHIOGRAPH
+
+# MAIN
+
+servo1 = PicoServo(SERVO1)
+servo2 = PicoServo(SERVO2)
+servo3 = PicoServo(SERVO3)
+
+bg = BrachioGraph(servo1, servo2, servo3)
+
+bg.plot_file(FILENAME)
+
+# END MAIN

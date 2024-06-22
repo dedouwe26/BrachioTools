@@ -2,8 +2,6 @@
 
 # From BrachioGraph
 
-from time import sleep
-# import readchar
 import math
 import servo
 from plotter import Plotter

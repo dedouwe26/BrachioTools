@@ -13,7 +13,7 @@ def parse(data: str) -> tuple[list[list[tuple[float, float]]], float, float, flo
     width = 0
     height = 0
     for line in lines:
-        for point in line:
+        for point in line: 
             minX = min(minX, point[0])
             minY = min(minY, point[1])
             width = max(width, point[0])

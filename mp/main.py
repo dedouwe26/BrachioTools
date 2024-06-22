@@ -1,16 +1,15 @@
 FILENAME = "drawing.json"
 
-MOTOR1 = 28
-MOTOR2 = 27
-MOTOR3 = 26
-import time
-import machine
+SERVO1 = 28
+SERVO2 = 27
+SERVO3 = 26
+
 import servo
 from brachiograph import BrachioGraph
 
-servo1 = servo.PicoServo(MOTOR1)
-servo2 = servo.PicoServo(MOTOR2)
-servo3 = servo.PicoServo(MOTOR3)
+servo1 = servo.PicoServo(SERVO1)
+servo2 = servo.PicoServo(SERVO2)
+servo3 = servo.PicoServo(SERVO3)
 
 bg = BrachioGraph(servo1, servo2, servo3)
 
