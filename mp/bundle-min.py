@@ -17,7 +17,7 @@ from time import sleep,ticks_ms
 try:import machine
 except ImportError:print('ERROR: This device does not have MicroPython.');exit(1)
 class Servo:
-	def __init__(self):0
+	def __init__(self):pass
 	def get(self)->int:raise NotImplementedError()
 	def goto(self,pos:int):raise NotImplementedError()
 	def goto_float(self,pos:float):self.goto(round(pos))
@@ -64,7 +64,9 @@ class Plotter:
 		pw_up=pw_up or 1400;pw_down=pw_down or 1600;self.pen=Pen(servo_3,bg=self,pw_up=pw_up,pw_down=pw_down,virtual=self.virtual);self.angular_step=angular_step or .1;self.resolution=resolution or .1;self.set_angles(self.servo_1_parked_angle,self.servo_2_parked_angle);sleep(1);self.status()
 	def virtualise(self):print('Initialising virtual BrachioGraph');self.virtual_pw_1=self.angles_to_pw_1(-90);self.virtual_pw_2=self.angles_to_pw_2(90);self.virtual=True
 	def setup_turtle(self,coarseness):
-		try:from turtle import BaseTurtle;self.turtle=BaseTurtle(window_size=850,speed=10,machine=self,coarseness=coarseness);self.turtle.draw_grid();self.t=self.turtle
+		try:
+			from turtle_plotter import BaseTurtle # type: ignore
+			self.turtle=BaseTurtle(window_size=850,speed=10,machine=self,coarseness=coarseness);self.turtle.draw_grid();self.t=self.turtle
 		except:print('turtle plotter unavailable')
 	def plot_file(self,filename='',bounds=None,angular_step=None,wait=None,resolution=None):
 		bounds=bounds or self.bounds
