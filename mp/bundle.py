@@ -904,7 +904,7 @@ class Plotter:
         print("------------------------------------------")
         print(f"resolution: {self.resolution} cm")
         print("------------------------------------------")
-        print(f"angular step: {self.angular_step}˚")
+        print(f"angular step: {self.angular_step}'")
         print("------------------------------------------")
 
     @property
